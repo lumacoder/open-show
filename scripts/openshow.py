@@ -475,17 +475,47 @@ def paginate(blocks: List[Block], title: str = "Deck") -> List[Slide]:
         headings = [b for b in page_blocks if b.type == "heading"]
         images = [b for b in page_blocks if b.type == "image"]
         lists = [b for b in page_blocks if b.type == "list"]
+        quotes = [b for b in page_blocks if b.type == "quote"]
+        codes = [b for b in page_blocks if b.type == "code"]
+        non_heading = [b for b in page_blocks if b.type != "heading"]
+        text_blocks = [b for b in page_blocks if b.type in ("paragraph", "list")]
 
+        # Cover: first slide with H1
         if is_first_slide and headings and headings[0].level == 1:
             slide.layout = "cover"
+        # Title divider: slide with only a heading (not first/last)
+        elif len(page_blocks) == 1 and headings and not is_first_slide and not is_last_slide:
+            slide.layout = "title"
+        # Closing
         elif is_last_slide and len(slides) > 2:
             slide.layout = "closing"
+        # Quote: dominant quote block
+        elif quotes and len(quotes) >= len(non_heading) * 0.5 and not images:
+            slide.layout = "quote"
+        # Code: dominant code block
+        elif codes and len(codes) >= len(non_heading) * 0.5 and not images:
+            slide.layout = "code"
+        # Comparison: exactly 2 lists and little else
+        elif len(lists) == 2 and len(text_blocks) <= 3 and not images:
+            slide.layout = "comparison"
+        # Grid: many small blocks (>=5) with no large paragraphs
+        elif len(page_blocks) >= 5 and not images and all(len(b.text) < 80 for b in page_blocks):
+            slide.layout = "grid"
+        # Image + text split
         elif images and len([b for b in page_blocks if b.type in ("paragraph", "list", "code")]) > 0:
-            slide.layout = "split"
+            if len(images) == 1:
+                slide.layout = "split"
+            else:
+                slide.layout = "split-top"
+        # List focused
         elif lists and not images:
             slide.layout = "list"
+        # Single image
         elif len(page_blocks) == 1 and page_blocks[0].type == "image":
             slide.layout = "image"
+        # Two-column text: many paragraphs without images/lists
+        elif len([b for b in page_blocks if b.type == "paragraph"]) >= 3 and not images and not lists:
+            slide.layout = "text-2col"
         else:
             slide.layout = "text"
 
@@ -501,231 +531,257 @@ def paginate(blocks: List[Block], title: str = "Deck") -> List[Slide]:
 # HTML 模板与渲染
 # ---------------------------------------------------------------------------
 CSS = """
+/* ================= OpenShow Design System ================= */
 :root {
-  --bg: #0f0f0f;
-  --fg: #f0f0f0;
-  --muted: #a0a0a0;
+  --bg: #0b0c0f;
+  --bg-soft: #111318;
+  --surface: #15171d;
+  --surface-2: #1c1f28;
+  --border: rgba(255,255,255,.08);
+  --border-strong: rgba(255,255,255,.14);
+  --text-1: #f2f4f8;
+  --text-2: #b8bfc8;
+  --text-3: #7a8490;
   --accent: #3b82f6;
-  --font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --mono: "SF Mono", "Fira Code", Consolas, "Courier New", monospace;
-}
-* { margin: 0; padding: 0; box-sizing: border-box; }
-html, body {
-  width: 100%; height: 100%;
-  overflow: hidden;
-  background: var(--bg);
-  color: var(--fg);
-  font-family: var(--font-family);
-  font-size: clamp(16px, 1.6vw, 28px);
-  line-height: 1.6;
-  touch-action: none;
-  -webkit-font-smoothing: antialiased;
-}
-#deck {
-  position: relative;
-  width: 100%; height: 100%;
-}
-.slide {
-  position: absolute;
-  inset: 0;
-  width: 100%; height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 6vh 8vw;
-  opacity: 0;
-  pointer-events: none;
-  transform: translateX(100%);
-  transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.5s ease;
-  overflow: hidden;
-  will-change: transform, opacity;
-  backface-visibility: hidden;
-}
-.slide.active {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateX(0);
-}
-.slide.prev {
-  opacity: 0;
-  transform: translateX(-100%);
-}
-.slide-inner {
-  width: 100%;
-  max-width: 1400px;
-  display: flex;
-  flex-direction: column;
-  gap: 1.2em;
-}
-h1, h2, h3, h4, h5, h6 {
-  line-height: 1.25;
-  font-weight: 700;
-}
-h1 { font-size: clamp(2rem, 5vw, 4rem); }
-h2 { font-size: clamp(1.5rem, 3.5vw, 2.8rem); }
-h3 { font-size: clamp(1.2rem, 2.5vw, 2rem); }
-p { opacity: 0.95; max-width: 70ch; }
-ul, ol { padding-left: 1.5em; }
-li { margin: 0.4em 0; }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-img {
-  max-width: 100%;
-  max-height: 60vh;
-  object-fit: contain;
-  border-radius: 8px;
-  box-shadow: 0 10px 40px rgba(0,0,0,0.35);
-}
-pre, code {
-  font-family: var(--mono);
-  background: rgba(255,255,255,0.06);
-  border-radius: 6px;
-}
-pre {
-  padding: 1em;
-  overflow: auto;
-  max-height: 55vh;
-  font-size: 0.85em;
+  --accent-2: #8b5cf6;
+  --accent-3: #ec4899;
+  --good: #22c55e;
+  --warn: #f59e0b;
+  --bad: #ef4444;
+  --grad: linear-gradient(135deg,#3b82f6 0%,#8b5cf6 55%,#ec4899 100%);
+  --grad-soft: linear-gradient(135deg,rgba(59,130,246,.12),rgba(139,92,246,.08) 55%,rgba(236,72,153,.06));
+  --radius: 18px;
+  --radius-sm: 10px;
+  --radius-lg: 24px;
+  --shadow: 0 10px 30px rgba(0,0,0,.25), 0 2px 8px rgba(0,0,0,.18);
+  --shadow-lg: 0 24px 60px rgba(0,0,0,.35), 0 8px 20px rgba(0,0,0,.22);
+  --font-sans: "PingFang SC","Microsoft YaHei",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --font-mono: "SF Mono","Fira Code",Consolas,"Courier New",monospace;
+  --ease: cubic-bezier(.22,1,.36,1);
 }
 
-.watermark {
-  position: absolute;
-  bottom: 3.5vh;
-  right: 3vw;
-  width: clamp(48px, 6vw, 84px);
-  height: clamp(48px, 6vw, 84px);
-  color: rgba(255,255,255,0.04);
-  pointer-events: none;
-  z-index: 1;
-  transition: color 0.5s ease;
-}
-.slide.active .watermark {
-  color: rgba(255,255,255,0.07);
-}
-blockquote {
-  border-left: 4px solid var(--accent);
-  padding-left: 1em;
-  color: var(--muted);
-  font-style: italic;
+[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-soft: #f7f7f8;
+  --surface: #ffffff;
+  --surface-2: #f2f2f4;
+  --border: rgba(0,0,0,.08);
+  --border-strong: rgba(0,0,0,.14);
+  --text-1: #111216;
+  --text-2: #55596a;
+  --text-3: #8a8f9e;
+  --accent: #3b6cff;
+  --accent-2: #7a5cff;
+  --accent-3: #ff5c8a;
+  --grad: linear-gradient(135deg,#3b6cff,#7a5cff 55%,#ff5c8a);
+  --shadow: 0 10px 30px rgba(18,24,40,.08), 0 2px 6px rgba(18,24,40,.04);
+  --shadow-lg: 0 24px 60px rgba(18,24,40,.14), 0 6px 16px rgba(18,24,40,.06);
 }
 
-/* layouts */
-[data-layout="cover"] .slide-inner {
-  align-items: center;
-  text-align: center;
-  gap: 0.8em;
-}
-[data-layout="cover"] h1 {
-  font-size: clamp(2.4rem, 6vw, 5rem);
-  letter-spacing: -0.02em;
-}
-[data-layout="cover"] .subtitle {
-  color: var(--muted);
-  font-size: clamp(1rem, 2vw, 1.6rem);
-}
-[data-layout="closing"] .slide-inner {
-  align-items: center;
-  text-align: center;
-}
-[data-layout="split"] .slide-inner {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  align-items: center;
-  gap: 3vw;
-}
-[data-layout="split"].img-top .slide-inner {
-  grid-template-columns: 1fr;
-  grid-template-rows: auto 1fr;
-  text-align: center;
-}
-[data-layout="list"] .slide-inner {
-  align-items: flex-start;
-  text-align: left;
-}
-[data-layout="list"] ul, [data-layout="list"] ol {
-  font-size: clamp(1.1rem, 2.2vw, 1.8rem);
-}
-[data-layout="image"] .slide-inner {
-  align-items: center;
-  justify-content: center;
-}
-[data-layout="image"] img {
-  max-height: 72vh;
-}
-[data-layout="text"] .slide-inner {
-  align-items: flex-start;
-  text-align: left;
+[data-theme="tech"] {
+  --bg: #0b0f19;
+  --bg-soft: #0f1522;
+  --surface: #131b2e;
+  --surface-2: #1a243d;
+  --text-1: #e8ebf4;
+  --text-2: #9aa3b2;
+  --text-3: #5e6a7c;
+  --accent: #7ee787;
+  --accent-2: #38bdf8;
+  --accent-3: #c084fc;
+  --grad: linear-gradient(135deg,#7ee787 0%,#38bdf8 55%,#c084fc 100%);
 }
 
-/* timer */
-#timer {
-  position: fixed;
-  top: 18px;
-  left: 22px;
-  z-index: 999;
-  font-variant-numeric: tabular-nums;
-  font-size: 0.85rem;
-  color: var(--muted);
-  background: rgba(0,0,0,0.4);
-  padding: 6px 12px;
-  border-radius: 999px;
-  backdrop-filter: blur(4px);
-  cursor: pointer;
-  user-select: none;
-  transition: opacity 0.3s;
-}
-#timer.hidden { opacity: 0; pointer-events: none; }
-#timer.paused { color: #f59e0b; }
-
-/* progress */
-#progress {
-  position: fixed;
-  bottom: 18px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  z-index: 999;
-  padding: 6px 14px;
-  background: rgba(0,0,0,0.4);
-  border-radius: 999px;
-  backdrop-filter: blur(4px);
-}
-.dot {
-  width: 8px; height: 8px;
-  border-radius: 50%;
-  background: rgba(255,255,255,0.25);
-  transition: background 0.3s;
-}
-.dot.active { background: var(--accent); }
-#page-num {
-  position: fixed;
-  bottom: 18px;
-  right: 22px;
-  font-size: 0.75rem;
-  color: var(--muted);
-  z-index: 999;
+[data-theme="pitch"] {
+  --bg: #070a1f;
+  --bg-soft: #0c1030;
+  --surface: #111642;
+  --surface-2: #1a1f5c;
+  --text-1: #ffffff;
+  --text-2: #bfc7ea;
+  --text-3: #7a85b8;
+  --accent: #6366f1;
+  --accent-2: #8b5cf6;
+  --accent-3: #f43f5e;
+  --grad: linear-gradient(135deg,#6366f1 0%,#8b5cf6 55%,#f43f5e 100%);
 }
 
-/* touch hints / click zones */
-.zone {
-  position: fixed;
-  top: 0; bottom: 0;
-  width: 20%;
-  z-index: 99;
-  cursor: pointer;
+[data-theme="academic"] {
+  --bg: #faf9f7;
+  --bg-soft: #f5f3ef;
+  --surface: #ffffff;
+  --surface-2: #edeae3;
+  --border: rgba(0,0,0,.06);
+  --border-strong: rgba(0,0,0,.12);
+  --text-1: #1a1a1a;
+  --text-2: #4a4a4a;
+  --text-3: #8a8a8a;
+  --accent: #8b4513;
+  --accent-2: #a0522d;
+  --accent-3: #cd853f;
+  --grad: linear-gradient(135deg,#8b4513,#cd853f);
+  --shadow: 0 4px 12px rgba(0,0,0,.06);
+  --shadow-lg: 0 12px 30px rgba(0,0,0,.1);
 }
-.zone:hover { background: rgba(255,255,255,0.02); }
-.zone-left { left: 0; }
-.zone-right { right: 0; width: 80%; }
 
-/* mobile */
+[data-theme="sunset"] {
+  --bg: #1a0f14;
+  --bg-soft: #24141b;
+  --surface: #2e1922;
+  --surface-2: #3d222e;
+  --text-1: #fff0f5;
+  --text-2: #e6c2cd;
+  --text-3: #a67c85;
+  --accent: #fb7185;
+  --accent-2: #f472b6;
+  --accent-3: #fb923c;
+  --grad: linear-gradient(135deg,#fb7185 0%,#f472b6 55%,#fb923c 100%);
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text-1);font-family:var(--font-sans);font-size:clamp(15px,1.5vw,26px);line-height:1.65;-webkit-font-smoothing:antialiased;letter-spacing:-.01em}
+img,svg,video{max-width:100%;display:block}
+a{color:var(--accent);text-decoration:none}
+code,kbd,pre,samp{font-family:var(--font-mono)}
+
+/* ================= DECK ================= */
+#deck{position:relative;width:100vw;height:100vh;overflow:hidden;background:var(--bg)}
+.slide{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:center;padding:6vh 7vw;opacity:0;pointer-events:none;transform:scale(.96) translateY(20px);transition:opacity .55s var(--ease),transform .55s var(--ease);overflow:hidden}
+.slide.active{opacity:1;pointer-events:auto;transform:scale(1) translateY(0);z-index:2}
+.slide.prev{transform:scale(.96) translateY(-20px)}
+.slide-inner{width:100%;max-width:1500px;display:flex;flex-direction:column;gap:1.1em}
+
+/* ================= TYPOGRAPHY ================= */
+.eyebrow{font-size:.7rem;font-weight:600;letter-spacing:.2em;text-transform:uppercase;color:var(--text-3)}
+.kicker{font-size:.75rem;font-weight:700;color:var(--accent);letter-spacing:.12em;text-transform:uppercase}
+h1.title,.h1{font-size:clamp(2.6rem,5.2vw,4.8rem);line-height:1.08;font-weight:800;letter-spacing:-.03em;margin:0;color:var(--text-1)}
+h2.title,.h2{font-size:clamp(1.8rem,3.6vw,3.2rem);line-height:1.12;font-weight:700;letter-spacing:-.02em;margin:0}
+h3,.h3{font-size:clamp(1.3rem,2.4vw,2rem);line-height:1.25;font-weight:600;margin:0}
+.lede{font-size:clamp(1.05rem,1.8vw,1.45rem);line-height:1.6;color:var(--text-2);font-weight:400;max-width:62ch}
+.dim{color:var(--text-2)}.dim2{color:var(--text-3)}
+.mono{font-family:var(--font-mono)}
+.gradient-text{background:var(--grad);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+
+/* ================= PRIMITIVES ================= */
+.stack>*+*{margin-top:.9em}
+.row{display:flex;gap:2vw;align-items:center}.row.wrap{flex-wrap:wrap}
+.grid{display:grid;gap:2vw}
+.g2{grid-template-columns:repeat(2,1fr)}.g3{grid-template-columns:repeat(3,1fr)}.g4{grid-template-columns:repeat(4,1fr)}
+.center{display:flex;align-items:center;justify-content:center;text-align:center}
+.fill{flex:1}
+.mt-s{margin-top:.4em}.mt-m{margin-top:.9em}.mt-l{margin-top:1.6em}
+.mb-s{margin-bottom:.4em}.mb-m{margin-bottom:.9em}.mb-l{margin-bottom:1.6em}
+
+/* ================= CARDS & BADGES ================= */
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.4em 1.6em;box-shadow:var(--shadow)}
+.card-soft{background:var(--surface-2);border:1px solid var(--border)}
+.card-outline{background:transparent;border:1.5px solid var(--border-strong);box-shadow:none}
+.card-accent{background:var(--surface);border-left:4px solid var(--accent)}
+.pill{display:inline-block;padding:.25em .8em;border-radius:999px;font-size:.65rem;font-weight:600;background:var(--surface-2);color:var(--text-2);border:1px solid var(--border)}
+.pill-accent{background:rgba(59,130,246,.15);color:var(--accent);border-color:rgba(59,130,246,.35)}
+
+/* ================= DIVIDERS ================= */
+.divider{height:1px;background:var(--border);width:100%}
+.divider-accent{height:3px;width:64px;background:var(--accent);border-radius:2px}
+
+/* ================= CHROME ================= */
+.deck-header{position:absolute;top:2.2vh;left:3vw;right:3vw;display:flex;align-items:center;justify-content:space-between;font-size:.65rem;color:var(--text-3);letter-spacing:.14em;text-transform:uppercase;z-index:10;pointer-events:none}
+.deck-footer{position:absolute;bottom:2.2vh;left:3vw;right:3vw;display:flex;align-items:center;justify-content:space-between;font-size:.65rem;color:var(--text-3);z-index:10;pointer-events:none}
+.progress-bar{position:fixed;left:0;right:0;bottom:0;height:3px;background:transparent;z-index:20}
+.progress-bar > span{display:block;height:100%;width:0;background:var(--accent);transition:width .35s var(--ease)}
+
+/* ================= MEDIA ================= */
+img{border-radius:var(--radius-sm);box-shadow:var(--shadow)}
+.img-frame{border:1px solid var(--border);padding:.4em;background:var(--surface)}
+.img-clean{box-shadow:none;border-radius:var(--radius-sm)}
+
+/* ================= CODE ================= */
+.code-block{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.2em 1.4em;overflow:auto;max-height:52vh;font-size:.82em;line-height:1.6}
+.code-block pre{margin:0;padding:0;background:transparent;border-radius:0}
+
+/* ================= QUOTE ================= */
+.quote-block{position:relative;padding:1.2em 1.6em;background:var(--grad-soft);border-radius:var(--radius);border:1px solid var(--border)}
+.quote-block::before{content:"\"";position:absolute;top:.2em;left:.4em;font-size:3.5rem;line-height:1;color:var(--accent);opacity:.35;font-family:Georgia,serif}
+.quote-block p{position:relative;z-index:1;font-size:1.25rem;line-height:1.7;font-style:italic;color:var(--text-1);margin:0}
+.quote-block cite{display:block;margin-top:.8em;font-size:.85rem;color:var(--text-3);font-style:normal}
+
+/* ================= LAYOUTS ================= */
+[data-layout="cover"] .slide-inner{align-items:center;text-align:center;gap:.7em}
+[data-layout="cover"] h1{font-size:clamp(2.8rem,6vw,5.2rem);letter-spacing:-.03em}
+[data-layout="cover"] .subtitle{color:var(--text-2);font-size:clamp(1.1rem,2.2vw,1.6rem)}
+[data-layout="cover"] .lede{max-width:52ch;text-align:center}
+
+[data-layout="title"] .slide-inner{align-items:center;text-align:center;gap:.6em}
+[data-layout="title"] h1{font-size:clamp(2.6rem,5.6vw,4.8rem)}
+
+[data-layout="closing"] .slide-inner{align-items:center;text-align:center;gap:.9em}
+[data-layout="closing"] h1{font-size:clamp(2.2rem,4.6vw,3.8rem)}
+
+[data-layout="text"] .slide-inner{align-items:flex-start;text-align:left;gap:.9em}
+[data-layout="text-2col"] .slide-inner{display:grid;grid-template-columns:1fr 1fr;gap:3vw;align-items:start;text-align:left}
+
+[data-layout="list"] .slide-inner{align-items:flex-start;text-align:left;gap:1em}
+[data-layout="list"] ul,[data-layout="list"] ol{padding-left:1.3em;font-size:clamp(1.05rem,1.9vw,1.55rem)}
+[data-layout="list"] li{margin:.55em 0;line-height:1.55}
+
+[data-layout="split"] .slide-inner{display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:3.5vw}
+[data-layout="split-top"] .slide-inner{display:grid;grid-template-columns:1fr;grid-template-rows:auto 1fr;gap:1.8em;text-align:center;align-items:center}
+[data-layout="split-top"] img{max-height:42vh;margin:0 auto}
+
+[data-layout="image"] .slide-inner{align-items:center;justify-content:center}
+[data-layout="image"] img{max-height:74vh;box-shadow:var(--shadow-lg)}
+
+[data-layout="quote"] .slide-inner{align-items:center;justify-content:center}
+[data-layout="quote"] .quote-block{max-width:72ch;width:100%}
+
+[data-layout="code"] .slide-inner{align-items:flex-start;justify-content:center}
+[data-layout="code"] .code-block{width:100%}
+
+[data-layout="comparison"] .slide-inner{display:grid;grid-template-columns:1fr 1fr;gap:3vw;align-items:start}
+[data-layout="comparison"] .col{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.4em}
+
+[data-layout="grid"] .slide-inner{display:grid;grid-template-columns:repeat(2,1fr);gap:1.5vw}
+[data-layout="grid"] .cell{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:1.2em 1.4em}
+
+/* ================= ANIMATIONS ================= */
+.anim-in{opacity:0;transform:translateY(18px);transition:opacity .5s var(--ease),transform .5s var(--ease)}
+.slide.active .anim-in{opacity:1;transform:translateY(0)}
+.slide.active .anim-in:nth-child(1){transition-delay:.06s}
+.slide.active .anim-in:nth-child(2){transition-delay:.12s}
+.slide.active .anim-in:nth-child(3){transition-delay:.18s}
+.slide.active .anim-in:nth-child(4){transition-delay:.24s}
+.slide.active .anim-in:nth-child(5){transition-delay:.30s}
+.slide.active .anim-in:nth-child(6){transition-delay:.36s}
+.slide.active .anim-in:nth-child(7){transition-delay:.42s}
+.slide.active .anim-in:nth-child(8){transition-delay:.48s}
+
+/* ================= TIMER & PROGRESS DOTS ================= */
+#timer{position:fixed;top:18px;left:22px;z-index:999;font-variant-numeric:tabular-nums;font-size:.75rem;color:var(--text-2);background:var(--surface);border:1px solid var(--border);padding:6px 14px;border-radius:999px;cursor:pointer;user-select:none;transition:opacity .3s}
+#timer.hidden{opacity:0;pointer-events:none}
+#timer.paused{color:var(--warn)}
+
+#progress-dots{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;z-index:999;padding:6px 14px;background:var(--surface);border:1px solid var(--border);border-radius:999px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--border-strong);transition:background .3s}
+.dot.active{background:var(--accent)}
+
+#page-num{position:fixed;bottom:18px;right:22px;font-size:.7rem;color:var(--text-3);z-index:999}
+
+/* ================= THEME SWITCHER ================= */
+#theme-switcher{position:fixed;top:18px;right:22px;z-index:999;font-size:.7rem;color:var(--text-2);background:var(--surface);border:1px solid var(--border);padding:6px 12px;border-radius:999px;cursor:pointer}
+#theme-switcher:hover{background:var(--surface-2)}
+
+/* ================= ZONES ================= */
+.zone{position:fixed;top:0;bottom:0;width:20%;z-index:99;cursor:pointer}
+.zone:hover{background:rgba(255,255,255,.02)}
+.zone-left{left:0}.zone-right{right:0;width:80%}
+
+/* ================= MOBILE ================= */
 @media (max-width: 768px) {
-  .slide { padding: 5vh 6vw; }
-  [data-layout="split"] .slide-inner { grid-template-columns: 1fr; text-align: center; }
-  img { max-height: 40vh; }
-  #timer { font-size: 0.75rem; top: 10px; left: 10px; }
+  .slide{padding:5vh 6vw}
+  [data-layout="split"] .slide-inner,[data-layout="text-2col"] .slide-inner,[data-layout="comparison"] .slide-inner,[data-layout="grid"] .slide-inner{grid-template-columns:1fr}
+  [data-layout="split-top"] .slide-inner{grid-template-rows:auto auto}
+  img{max-height:40vh}
+  #timer,#theme-switcher{font-size:.65rem;top:10px}
 }
 """.strip()
 
@@ -734,6 +790,8 @@ JS = """
 (function(){
   const slides = Array.from(document.querySelectorAll('.slide'));
   let idx = 0;
+  const themes = ['dark','light','tech','pitch','academic','sunset'];
+  let themeIdx = 0;
 
   function update(){
     slides.forEach((s,i)=>{
@@ -741,78 +799,65 @@ JS = """
       if(i===idx){ s.classList.add('active'); }
       else if(i<idx){ s.classList.add('prev'); }
     });
-    document.querySelectorAll('.dot').forEach((d,i)=>{
-      d.classList.toggle('active', i===idx);
-    });
+    document.querySelectorAll('.dot').forEach((d,i)=>{ d.classList.toggle('active', i===idx); });
     document.getElementById('page-text').textContent = (idx+1) + ' / ' + slides.length;
+    const bar = document.querySelector('.progress-bar > span');
+    if(bar){ bar.style.width = ((idx+1)/slides.length*100) + '%'; }
+    const hCurrent = document.querySelector('.deck-header .current');
+    if(hCurrent){ hCurrent.textContent = 'SLIDE ' + (idx+1); }
   }
 
   function next(){ if(idx < slides.length-1){ idx++; update(); } }
   function prev(){ if(idx > 0){ idx--; update(); } }
+  function cycleTheme(){
+    themeIdx = (themeIdx+1) % themes.length;
+    document.documentElement.setAttribute('data-theme', themes[themeIdx]);
+  }
 
-  // keyboard
   document.addEventListener('keydown', e=>{
     if(e.key==='ArrowRight' || e.key==='ArrowDown' || e.key===' ' || e.key==='PageDown'){
-      e.preventDefault();
-      next();
+      e.preventDefault(); next();
     } else if(e.key==='ArrowLeft' || e.key==='ArrowUp' || e.key==='PageUp'){
-      e.preventDefault();
-      prev();
+      e.preventDefault(); prev();
     } else if(e.key==='f' || e.key==='F'){
       e.preventDefault();
       if(!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
       else document.exitFullscreen().catch(()=>{});
     } else if(e.key==='t' || e.key==='T'){
-      e.preventDefault();
-      document.getElementById('timer').classList.toggle('hidden');
+      e.preventDefault(); document.getElementById('timer').classList.toggle('hidden');
+    } else if(e.key==='a' || e.key==='A'){
+      // toggle animation classes by forcing a tiny reflow
+      slides.forEach(s=>{
+        s.querySelectorAll('.anim-in').forEach(el=>{
+          el.style.transition='none'; el.style.opacity='0'; el.style.transform='translateY(18px)';
+          setTimeout(()=>{ el.style.transition=''; el.style.opacity=''; el.style.transform=''; }, 50);
+        });
+      });
     }
   });
 
-  // click zones
   document.querySelector('.zone-left').addEventListener('click', prev);
   document.querySelector('.zone-right').addEventListener('click', next);
 
-  // touch swipe
   let startX = 0;
-  document.addEventListener('touchstart', e=>{
-    startX = e.touches[0].clientX;
-  }, {passive: true});
+  document.addEventListener('touchstart', e=>{ startX = e.touches[0].clientX; }, {passive:true});
   document.addEventListener('touchend', e=>{
     const endX = e.changedTouches[0].clientX;
     const diff = startX - endX;
     if(Math.abs(diff) > 40){ diff > 0 ? next() : prev(); }
-  }, {passive: true});
+  }, {passive:true});
 
-  // prevent link jumps in deck mode
   document.body.addEventListener('click', e=>{
     const a = e.target.closest('a');
-    if(a){
-      const href = a.getAttribute('href') || '';
-      if(!href.startsWith('#')){
-        e.preventDefault();
-      }
-    }
+    if(a){ const href = a.getAttribute('href')||''; if(!href.startsWith('#')){ e.preventDefault(); } }
   });
 
-  // timer
   const timerEl = document.getElementById('timer');
   let seconds = 0, paused = false, timerStarted = false;
   function fmt(n){ return n.toString().padStart(2,'0'); }
-  function updateTimer(){
-    const m = Math.floor(seconds/60), s = seconds%60;
-    timerEl.textContent = fmt(m) + ':' + fmt(s);
-  }
-  setInterval(()=>{
-    if(!paused && timerStarted){
-      seconds++;
-      updateTimer();
-    }
-  }, 1000);
-  timerEl.addEventListener('click', ()=>{
-    paused = !paused;
-    timerEl.classList.toggle('paused', paused);
-  });
-  // start timer on first interaction or after 1s
+  function updateTimer(){ timerEl.textContent = fmt(Math.floor(seconds/60)) + ':' + fmt(seconds%60); }
+  setInterval(()=>{ if(!paused && timerStarted){ seconds++; updateTimer(); } }, 1000);
+  timerEl.addEventListener('click', ()=>{ paused = !paused; timerEl.classList.toggle('paused', paused); });
   setTimeout(()=>{ timerStarted = true; }, 1000);
 
   update();
@@ -822,72 +867,182 @@ JS = """
 
 def _render_slide_content(slide: Slide) -> str:
     """把 Slide 的 blocks 渲染成 HTML，同时做 layout 微调。"""
+    def _anim(html: str, tag: str = "div") -> str:
+        # 给外层容器加进入动画类，内容本身保持
+        return f'<{tag} class="anim-in">{html}</{tag}>'
+
     if slide.layout == "cover":
         parts = []
+        eyebrow = ""
         for b in slide.blocks:
             if b.type == "heading" and b.level == 1:
-                parts.append(f'<h1>{b.text}</h1>')
+                parts.append(f'<h1 class="title gradient-text anim-in">{b.text}</h1>')
             elif b.type == "heading":
-                parts.append(f'<div class="subtitle">{b.text}</div>')
+                parts.append(f'<div class="subtitle anim-in">{b.text}</div>')
             else:
-                parts.append(b.html)
+                # wrap paragraph in lede for better style
+                if b.type == "paragraph":
+                    parts.append(f'<p class="lede anim-in">{b.text}</p>')
+                else:
+                    parts.append(_anim(b.html))
+        if len(parts) > 1 and slide.blocks[0].type == "heading" and slide.blocks[0].level == 1:
+            eyebrow = '<div class="eyebrow anim-in">OPENSHOW</div>'
+        return eyebrow + "\n".join(parts)
+
+    if slide.layout == "title":
+        h = slide.blocks[0]
+        return f'<div class="eyebrow anim-in">SECTION</div>\n<h1 class="title gradient-text anim-in">{h.text}</h1>'
+
+    if slide.layout == "closing":
+        parts = []
+        for b in slide.blocks:
+            if b.type == "heading":
+                parts.append(f'<h1 class="title anim-in">{b.text}</h1>')
+            elif b.type == "paragraph":
+                parts.append(f'<p class="lede anim-in">{b.text}</p>')
+            else:
+                parts.append(_anim(b.html))
         return "\n".join(parts)
+
+    if slide.layout == "quote":
+        q = slide.blocks[0]
+        cite = ""
+        if len(slide.blocks) > 1 and slide.blocks[1].type == "paragraph":
+            cite = f'<cite class="anim-in">{slide.blocks[1].text}</cite>'
+        return f'<div class="quote-block anim-in">{q.html}{cite}</div>'
+
+    if slide.layout == "code":
+        parts = []
+        heading = ""
+        for b in slide.blocks:
+            if b.type == "heading":
+                heading = f'<h3 class="anim-in">{b.text}</h3>'
+            elif b.type == "code":
+                parts.append(f'<div class="code-block anim-in">{b.html}</div>')
+            else:
+                parts.append(_anim(b.html))
+        return heading + "\n".join(parts)
+
+    if slide.layout == "comparison":
+        lists = [b for b in slide.blocks if b.type == "list"]
+        heading = ""
+        for b in slide.blocks:
+            if b.type == "heading":
+                heading = f'<h2 class="anim-in">{b.text}</h2>'
+        cols = ""
+        for i, lst in enumerate(lists[:2]):
+            title = "A" if i == 0 else "B"
+            cols += f'<div class="col anim-in">{lst.html}</div>'
+        return heading + f'<div class="row fill anim-in" style="width:100%">{cols}</div>'
+
+    if slide.layout == "grid":
+        heading = ""
+        cells = []
+        for b in slide.blocks:
+            if b.type == "heading":
+                heading = f'<h2 class="anim-in">{b.text}</h2>'
+            else:
+                content = b.text if b.type == "paragraph" else b.html
+                cells.append(f'<div class="cell anim-in">{content}</div>')
+        grid = "\n".join(cells)
+        return heading + f'<div class="grid g2">{grid}</div>'
 
     if slide.layout == "split":
         images = [b.html for b in slide.blocks if b.type == "image"]
-        texts = [b.html for b in slide.blocks if b.type != "image"]
-        if len(images) == 1:
-            return f"""<div>{"".join(images)}</div>
-<div>{"".join(texts)}</div>"""
-        else:
-            slide.layout = "split img-top"
-            return f"""<div>{"".join(images)}</div>
-<div>{"".join(texts)}</div>"""
+        texts = []
+        heading = ""
+        for b in slide.blocks:
+            if b.type == "heading":
+                heading = f'<h2 class="anim-in">{b.text}</h2>'
+            elif b.type != "image":
+                texts.append(_anim(b.html))
+        img_html = f'<div class="anim-in">{"".join(images[:1])}</div>'
+        text_html = f'<div class="stack">{heading}{"".join(texts)}</div>'
+        return img_html + "\n" + text_html
+
+    if slide.layout == "split-top":
+        images = [b.html for b in slide.blocks if b.type == "image"]
+        texts = []
+        heading = ""
+        for b in slide.blocks:
+            if b.type == "heading":
+                heading = f'<h2 class="anim-in">{b.text}</h2>'
+            elif b.type != "image":
+                texts.append(_anim(b.html))
+        return f'<div class="anim-in">{"".join(images)}</div>' + "\n" + f'<div>{heading}{"".join(texts)}</div>'
 
     if slide.layout == "image":
-        return "\n".join(b.html for b in slide.blocks)
+        return "\n".join(f'<div class="anim-in">{b.html}</div>' for b in slide.blocks)
 
     if slide.layout == "list":
         heading = ""
         body = []
         for b in slide.blocks:
             if b.type == "heading":
-                heading = b.html
+                heading = f'<h2 class="anim-in">{b.text}</h2>'
             else:
-                body.append(b.html)
-        return f"{heading}\n<div>{''.join(body)}</div>"
+                body.append(_anim(b.html))
+        return heading + "\n" + "\n".join(body)
 
-    # text / closing / default
-    return "\n".join(b.html for b in slide.blocks)
+    if slide.layout == "text-2col":
+        heading = ""
+        paras = []
+        for b in slide.blocks:
+            if b.type == "heading":
+                heading = f'<h2 class="anim-in">{b.text}</h2>'
+            else:
+                paras.append(b.html)
+        mid = (len(paras) + 1) // 2
+        col1 = "\n".join(paras[:mid])
+        col2 = "\n".join(paras[mid:])
+        return heading + f'<div class="text-2col row fill anim-in" style="align-items:flex-start;gap:3vw;width:100%"><div class="stack">{col1}</div><div class="stack">{col2}</div></div>'
+
+    # text (default)
+    parts = []
+    for b in slide.blocks:
+        if b.type == "heading":
+            parts.append(f'<h2 class="anim-in">{b.text}</h2>')
+        else:
+            parts.append(_anim(b.html))
+    return "\n".join(parts)
 
 
 def build_html(slides: List[Slide], title: str = "OpenShow", logo_svg: str = "") -> str:
     dots = "\n".join(f'<div class="dot{" active" if i == 0 else ""}"></div>' for i in range(len(slides)))
     slide_html = "\n".join(
-        f'<section class="slide" data-layout="{s.layout}"><div class="watermark">{logo_svg}</div><div class="slide-inner">{_render_slide_content(s)}</div></section>'
+        f'<section class="slide" data-layout="{s.layout}"><div class="slide-inner">{_render_slide_content(s)}</div></section>'
         for s in slides
     )
+    safe_title = title.replace("<", "&lt;").replace(">", "&gt;")
 
     return f"""<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{title}</title>
+<title>{safe_title}</title>
 <style>
 {CSS}
 </style>
 </head>
 <body>
+<div class="deck-header">
+  <span>{safe_title}</span>
+  <span class="current">SLIDE 1</span>
+</div>
 <div id="deck">
 {slide_html}
 </div>
 <div class="zone zone-left"></div>
 <div class="zone zone-right"></div>
 <div id="timer">00:00</div>
-<div id="progress">
+<div id="theme-switcher" title="按 T 隐藏/显示计时器">
+  <span style="opacity:.7">主题</span> <span id="theme-name" style="font-weight:700">DARK</span>
+</div>
+<div id="progress-dots">
 {dots}
 </div>
+<div class="progress-bar"><span></span></div>
 <div id="page-num"><span id="page-text">1 / {len(slides)}</span></div>
 <script>
 {JS}
